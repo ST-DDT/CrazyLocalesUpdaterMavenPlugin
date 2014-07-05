@@ -7,7 +7,7 @@
 
 	<groupId>de.st_ddt.crazy.maven</groupId>
 	<artifactId>CrazyLocalesUpdater</artifactId>
-	<version>1.0.0</version>
+	<version>1.1.0</version>
 	<packaging>maven-plugin</packaging>
 
 	<name>CrazyLocalesUpdater</name>
@@ -93,7 +93,7 @@
 				<artifactId>maven-plugin-plugin</artifactId>
 				<version>3.2</version>
 				<configuration>
-					<goalPrefix>crazylocaleupdater</goalPrefix>
+					<goalPrefix>CrazyLocalesUpdater</goalPrefix>
 					<skipErrorNoDescriptorsFound>true</skipErrorNoDescriptorsFound>
 				</configuration>
 				<executions>

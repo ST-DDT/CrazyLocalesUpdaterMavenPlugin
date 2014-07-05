@@ -33,9 +33,10 @@ import org.apache.maven.plugins.annotations.Component;
 import org.apache.maven.plugins.annotations.LifecyclePhase;
 import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
+import org.apache.maven.plugins.annotations.ResolutionScope;
 import org.apache.maven.project.MavenProject;
 
-@Mojo(name = "update", defaultPhase = LifecyclePhase.GENERATE_RESOURCES)
+@Mojo(name = "update", defaultPhase = LifecyclePhase.GENERATE_RESOURCES, requiresDependencyResolution = ResolutionScope.COMPILE, requiresDependencyCollection = ResolutionScope.COMPILE)
 public class LocalesUpdaterMojo extends AbstractMojo
 {
 
@@ -60,11 +61,6 @@ public class LocalesUpdaterMojo extends AbstractMojo
 	@Parameter(defaultValue = "src/main/resources/resource/lang", property = "languagefolder", required = true)
 	private File languageFolder;
 	/**
-	 * The prefixes that should be included in the lang files.
-	 */
-	@Parameter(property = "allowedPrefixes")
-	private List<String> allowedPrefixes;
-	/**
 	 * The artifacts that should be included in the lang files.
 	 */
 	@Parameter(property = "includeArtifacts")
@@ -77,20 +73,17 @@ public class LocalesUpdaterMojo extends AbstractMojo
 	@Override
 	public void execute() throws MojoExecutionException
 	{
-		if (allowedPrefixes == null)
-			allowedPrefixes = new ArrayList<String>();
-		if (allowedPrefixes.isEmpty())
-			allowedPrefixes.add(project.getArtifactId());
 		final File f = languageFolder;
 		getLog().info("Proccessing language files in: " + f);
 		if (!f.exists())
 		{
-			getLog().info("Language folder created!");
 			f.mkdirs();
+			getLog().info("Language folder created!");
 		}
-		getLog().info("Searching messages links...");
-		for (final Artifact artifact : project.getDependencyArtifacts())
+		getLog().info("Searching message links...");
+		for (final Artifact artifact : project.getArtifacts())
 		{
+			getLog().debug("Checking " + artifact.getArtifactId());
 			final File file = artifact.getFile();
 			try (ZipFile jarFile = new ZipFile(file))
 			{
@@ -108,7 +101,7 @@ public class LocalesUpdaterMojo extends AbstractMojo
 						if (include)
 							searchEntries(in, internalLinks);
 						else
-							searchEntries(in, externalLinks, allowedPrefixes);
+							searchEntries(in, externalLinks);
 					}
 			}
 			catch (final Exception e)
@@ -116,7 +109,7 @@ public class LocalesUpdaterMojo extends AbstractMojo
 				throw new MojoExecutionException("Could not read dependency jar", e);
 			}
 		}
-		getLog().info("Searching messages links completed");
+		getLog().info("Searching message links completed (" + externalLinks.size() + " found)");
 		getLog().info("Updating messages file...");
 		// Search internal files
 		final Set<File> files = new HashSet<File>();
@@ -144,24 +137,45 @@ public class LocalesUpdaterMojo extends AbstractMojo
 		}
 		externalLinks.putAll(internalLinks);
 		// Add linktargets
-		for (final VarLink link : applicableVars)
+		if (!externalLinks.isEmpty())
 		{
-			final Pattern pattern = Pattern.compile("\\{" + link.getVariable() + "\\}");
-			for (final Entry<String, String> entry : externalLinks.entrySet())
+			getLog().info("- Checking message links...");
+			for (final VarLink link : applicableVars)
 			{
-				final Matcher matcher = pattern.matcher(entry.getKey());
-				if (matcher.find())
+				if (getLog().isDebugEnabled())
+					getLog().info("  - " + link.getVariable() + " => " + link.getValue());
+				int count = 0;
+				final Pattern pattern = Pattern.compile("\\{" + link.getVariable() + "\\}");
+				for (final Entry<String, String> entry : externalLinks.entrySet())
 				{
-					final String key = matcher.replaceAll(link.getValue());
-					final String oldValue = entries.get(key);
-					if (oldValue == null || oldValue.isEmpty())
-						entries.put(key, entry.getValue());
+					final Matcher matcher = pattern.matcher(entry.getKey());
+					if (matcher.find())
+					{
+						getLog().debug("    - Match: " + entry.getKey());
+						count++;
+						final String key = matcher.replaceAll(link.getValue());
+						final String oldValue = entries.get(key);
+						if (oldValue == null || oldValue.isEmpty())
+							entries.put(key, entry.getValue());
+					}
+					else
+						getLog().debug("    - No Match: " + entry.getKey());
 				}
+				if (count > 0)
+					if (getLog().isDebugEnabled())
+						getLog().info("    - Found " + count + " matches!");
+					else
+						getLog().info("  - " + link.getVariable() + " => " + link.getValue() + " (" + count + " matches)");
 			}
+			getLog().info("- Checking message links completed");
 		}
 		// Save messages.lang
+		getLog().info("- Writing messages file...");
 		writeMessages(new File(languageFolder, MESSAGESFILE), entries);
+		getLog().info("- Writing messages file completed");
+		getLog().info("- Writing message links file...");
 		writeMessages(new File(languageFolder, MESSAGELINKSFILE), internalLinks);
+		getLog().info("- Writing message links file completed");
 		getLog().info("Updating messages file completed");
 		// Search for languages
 		final File[] languages = languageFolder.listFiles(new LangFileFilter());
@@ -257,19 +271,9 @@ public class LocalesUpdaterMojo extends AbstractMojo
 		}
 	}
 
-	private void searchEntries(final InputStream source, final Map<String, String> messages, final List<String> allowedPrefixes) throws IOException
-	{
-		final Map<String, String> entries = new LinkedHashMap<String, String>();
-		searchEntries(source, entries);
-		for (final Entry<String, String> entry : entries.entrySet())
-			for (final String prefix : allowedPrefixes)
-				if (entry.getKey().startsWith(prefix))
-					messages.put(entry.getKey(), entry.getValue());
-	}
-
 	private void writeMessages(final File target, final Map<String, String> messages) throws MojoExecutionException
 	{
-		if (messages.size() == 0)
+		if (messages.isEmpty())
 			return;
 		messages.remove(project.getName().toUpperCase());
 		target.getParentFile().mkdirs();
@@ -284,13 +288,13 @@ public class LocalesUpdaterMojo extends AbstractMojo
 		{
 			throw new MojoExecutionException("Error while writing " + target.getName(), e);
 		}
-		getLog().info(" - " + messages.size() + " Entries found!");
+		getLog().info("  - Wrote " + messages.size() + " Entries!");
 	}
 
 	private void writeTranslations(final File target, final Map<String, String> defaults, final Map<String, String> messages) throws MojoExecutionException
 	{
 		messages.remove(project.getName().toUpperCase());
-		if (messages.size() == 0)
+		if (messages.isEmpty())
 			return;
 		try (OutputStream out = new FileOutputStream(target);
 				final Writer writer = new BufferedWriter(new OutputStreamWriter(out, UTF8)))
